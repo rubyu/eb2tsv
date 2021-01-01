@@ -156,7 +156,7 @@ public class EntryEnumerator implements Searcher {
                 indexValue = new String(indexBytes, "x-JIS0208");
             } catch (UnsupportedEncodingException ex) {}
 
-            if (indexValue == null || indexValue.contains("\uFFFD")) {
+            if (indexValue == null) {
                 return;
             }
 
@@ -568,7 +568,7 @@ public class EntryEnumerator implements Searcher {
                 _entryCount = ByteUtil.getInt2(_cache, 2);
                 _entryIndex = 0;
                 _off = 4;
-                _logger.info("page=0x" + HexUtil.toHexString(_page)
+                _logger.debug("page=0x" + HexUtil.toHexString(_page)
                         + ", ID=0x" + HexUtil.toHexString(_pageID));
             }
         }

@@ -8,10 +8,15 @@ class TSVExporter(w: Writer) extends IExporter {
   val writer = CSVWriter.open(w)(format)
 
   private def escape(s: String): String =
-    s.replaceAll(raw"\\", raw"\\\\").replaceAll(raw"\n", raw"\\n")
+    s.replaceAll(raw"\\", raw"\\\\")
+      .replaceAll(raw"\r\n", raw"\\n")
+      .replaceAll(raw"\n", raw"\\n")
 
   override def export(indexValue: String, heading: String, description: String): Unit =
-    writer.writeRow(List(escape(indexValue), escape(heading), escape(description)))
+    writer.writeRow(List(
+      //escape(indexValue),
+      escape(heading),
+      escape(description)))
 
   def close(): Unit = writer.close()
 }

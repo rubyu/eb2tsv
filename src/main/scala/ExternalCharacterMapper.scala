@@ -2,7 +2,6 @@
 package com.github.rubyu.ebquery
 
 import java.io.{FileInputStream, InputStream}
-import scala.io
 import util.control.Exception._
 
 class ExternalCharacterMapper(stream: InputStream, charset: String = "MS932") {
@@ -28,7 +27,7 @@ class ExternalCharacterMapper(stream: InputStream, charset: String = "MS932") {
     } getOrElse ""
 
   def loadEBMapFile(stream: InputStream, charset: String) = {
-    io.Source.fromInputStream(stream, charset)
+    scala.io.Source.fromInputStream(stream, charset)
       .getLines()
       .map { _
         .takeWhile(_ != '#')
