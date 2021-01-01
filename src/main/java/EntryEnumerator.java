@@ -2,21 +2,43 @@ package io.github.eb4j;
 
 import java.io.UnsupportedEncodingException;
 
+import io.github.eb4j.hook.Hook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.github.eb4j.io.EBFile;
 import io.github.eb4j.io.BookInputStream;
 import io.github.eb4j.util.ByteUtil;
-import io.github.eb4j.util.CompareUtil;
 import io.github.eb4j.util.HexUtil;
+
+import com.github.rubyu.ebquery.IExporter;
 
 /**
  * Search class for searching with a single word.
  *
  * @author Hisaya FUKUMOTO
+ *
+ * Copied from: https://github.com/eb4j/eb4j/blob/5c1dd0a8aa6eca5ae7489787456333d7eef5fa2a/eb4j-core/src/main/java/io/github/eb4j/SingleWordSearcher.java
  */
-public class SingleWordSearcher implements Searcher {
+public class EntryEnumerator implements Searcher {
+    private Hook _hook = null;
+    private com.github.rubyu.ebquery.IExporter _exporter = null;
+
+    public static EntryEnumerator Create(SubBook sub, Hook<String> hook, IExporter exporter) {
+        IndexStyle[] wordStyles = new IndexStyle[3];
+        wordStyles[0] = sub.getWordIndexStyle(0); // KANA
+        wordStyles[1] = sub.getWordIndexStyle(1); // KANJI
+        wordStyles[2] = sub.getWordIndexStyle(2); // ALPHABET
+
+        IndexStyle wordStyle;
+        if (wordStyles[2] != null) {
+            wordStyle = wordStyles[2];
+        } else {
+            wordStyle = wordStyles[1];
+        }
+
+        return new EntryEnumerator(sub, hook, exporter, wordStyle, EXACTWORD);
+    }
 
     /** 前方一致検索を示す定数 */
     protected static final int WORD = 0;
@@ -79,10 +101,10 @@ public class SingleWordSearcher implements Searcher {
     private boolean _inGroupEntry = false;
     /** 比較結果 */
     private int _comparison = -1;
-
     /** キーワード検索用見出し位置 */
     private long _keywordHeading = 0L;
 
+    private byte[] _currentGroupEntryIndex = null;
 
     /**
      * Build searcher object.
@@ -97,15 +119,52 @@ public class SingleWordSearcher implements Searcher {
      * @see SingleWordSearcher#CROSS
      * @see SingleWordSearcher#MULTI
      */
-    protected SingleWordSearcher(final SubBook sub, final IndexStyle style, final int type) {
+    protected EntryEnumerator(final SubBook sub, final Hook<String> hook, final IExporter exporter, final IndexStyle style, final int type) {
         super();
         _logger = LoggerFactory.getLogger(getClass());
+        _hook = hook;
+        _exporter = exporter;
         _sub = sub;
         _file = sub.getTextFile();
         _style = style;
         _type = type;
+        search();
     }
 
+    private int _comparePre(final byte[] key, final byte[] pattern) {
+        return 0;
+    }
+
+    private int _compareSingle(byte[] key, byte[] pattern) {
+        return 1;
+    }
+
+    private int _compareGroup(byte[] key, byte[] pattern) {
+        return 0;
+    }
+
+    private void search() {
+        try {
+            search("dummy search string".getBytes());
+        } catch (EBException ex) {}
+    }
+
+    private void export(byte[] indexBytes, Result result) {
+        try {
+            String indexValue = null;
+            try {
+                indexValue = new String(indexBytes, "x-JIS0208");
+            } catch (UnsupportedEncodingException ex) {}
+
+            if (indexValue == null || indexValue.contains("\uFFFD")) {
+                return;
+            }
+
+            String heading = result.getHeading(this._hook).toString();
+            String description = result.getText(this._hook).toString();
+            this._exporter.export(indexValue, heading, description);
+        } catch (EBException ex) {}
+    }
 
     /**
      * Set a word to search.
@@ -146,181 +205,181 @@ public class SingleWordSearcher implements Searcher {
         }
     }
 
-    /**
-     * キーとパターンを比較します。
-     *
-     * @param key キー
-     * @param pattern パターン
-     * @return キーがパターンと同じ場合:0、
-     *         キーがパターンより大きい場合:1以上、
-     *         キーがパターンより小さい場合:-1以下
-     */
-    private int _comparePre(final byte[] key, final byte[] pattern) {
-        int comp = 0;
-        switch (_type) {
-            case EXACTWORD:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToLatin(key, pattern, true);
-                } else {
-                    comp = CompareUtil.compareToJISX0208(key, pattern, true);
-                }
-                break;
-            case MULTI:
-                if (_style.getCandidatePage() == 0) {
-                    comp = CompareUtil.compareToByte(key, pattern, true);
-                } else {
-                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                        comp = CompareUtil.compareToLatin(key, pattern, true);
-                    } else {
-                        comp = CompareUtil.compareToJISX0208(key, pattern, true);
-                    }
-                }
-                break;
-            case WORD:
-            case ENDWORD:
-            case KEYWORD:
-            case CROSS:
-            default:
-                comp = CompareUtil.compareToByte(key, pattern, true);
-                break;
-        }
-        try {
-            _logger.debug("compare key word: (" + comp + ") '"
-                          + new String(key, "x-JIS0208") + "' '"
-                          + new String(pattern, "x-JIS0208") + "'");
-        } catch (UnsupportedEncodingException e) {
-        }
-        return comp;
-    }
-
-    /**
-     * キーとパターンを比較します。
-     *
-     * @param key キー
-     * @param pattern パターン
-     * @return キーがパターンと同じ場合:0、
-     *         キーがパターンより大きい場合:1以上、
-     *         キーがパターンより小さい場合:-1以下
-     */
-    private int _compareSingle(final byte[] key, final byte[] pattern) {
-        int comp = 0;
-        switch (_type) {
-            case ENDWORD:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToByte(key, pattern, false);
-                } else {
-                    IndexStyle style = _sub.getEndwordIndexStyle(SubBook.KANA);
-                    if (style != null && _style.getStartPage() == style.getStartPage()) {
-                        comp = CompareUtil.compareToKanaSingle(key, pattern, false);
-                    } else {
-                        comp = CompareUtil.compareToByte(key, pattern, false);
-                    }
-                }
-                break;
-            case EXACTWORD:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToLatin(key, pattern, false);
-                } else {
-                    IndexStyle style = _sub.getWordIndexStyle(SubBook.KANA);
-                    if (style != null && _style.getStartPage() == style.getStartPage()) {
-                        comp = CompareUtil.compareToKanaSingle(key, pattern, true);
-                    } else {
-                        comp = CompareUtil.compareToJISX0208(key, pattern, false);
-                    }
-                }
-                break;
-            case KEYWORD:
-            case CROSS:
-                comp = CompareUtil.compareToByte(key, pattern, false);
-                break;
-            case MULTI:
-                if (_style.getCandidatePage() == 0) {
-                    comp = CompareUtil.compareToByte(key, pattern, false);
-                } else {
-                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                        comp = CompareUtil.compareToLatin(key, pattern, false);
-                    } else {
-                        comp = CompareUtil.compareToJISX0208(key, pattern, false);
-                    }
-                }
-                break;
-            case WORD:
-            default:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToByte(key, pattern, false);
-                } else {
-                    IndexStyle style = _sub.getWordIndexStyle(SubBook.KANA);
-                    if (style != null && _style.getStartPage() == style.getStartPage()) {
-                        comp = CompareUtil.compareToKanaSingle(key, pattern, false);
-                    } else {
-                        comp = CompareUtil.compareToByte(key, pattern, false);
-                    }
-                }
-                break;
-        }
-        try {
-            _logger.debug("compare key word: (" + comp + ") '"
-                          + new String(key, "x-JIS0208") + "' '"
-                          + new String(pattern, "x-JIS0208") + "'");
-        } catch (UnsupportedEncodingException e) {
-        }
-        return comp;
-    }
-
-    /**
-     * キーとパターンを比較します。
-     *
-     * @param key キー
-     * @param pattern パターン
-     * @return キーがパターンと同じ場合:0、
-     *         キーがパターンより大きい場合:1以上、
-     *         キーがパターンより小さい場合:-1以下
-     */
-    private int _compareGroup(final byte[] key, final byte[] pattern) {
-        int comp = 0;
-        switch (_type) {
-            case EXACTWORD:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToLatin(key, pattern, false);
-                } else {
-                    comp = CompareUtil.compareToKanaGroup(key, pattern, true);
-                }
-                break;
-            case MULTI:
-                if (_style.getCandidatePage() == 0) {
-                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                        comp = CompareUtil.compareToByte(key, pattern, false);
-                    } else {
-                        comp = CompareUtil.compareToKanaGroup(key, pattern, false);
-                    }
-                } else {
-                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                        comp = CompareUtil.compareToLatin(key, pattern, false);
-                    } else {
-                        comp = CompareUtil.compareToKanaGroup(key, pattern, true);
-                    }
-                }
-                break;
-            case WORD:
-            case ENDWORD:
-            case KEYWORD:
-            case CROSS:
-            default:
-                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
-                    comp = CompareUtil.compareToByte(key, pattern, false);
-                } else {
-                    comp = CompareUtil.compareToKanaGroup(key, pattern, false);
-                }
-                break;
-        }
-        try {
-            _logger.debug("compare key word: (" + comp + ") '"
-                          + new String(key, "x-JIS0208") + "' '"
-                          + new String(pattern, "x-JIS0208") + "'");
-        } catch (UnsupportedEncodingException e) {
-        }
-        return comp;
-    }
+//    /**
+//     * キーとパターンを比較します。
+//     *
+//     * @param key キー
+//     * @param pattern パターン
+//     * @return キーがパターンと同じ場合:0、
+//     *         キーがパターンより大きい場合:1以上、
+//     *         キーがパターンより小さい場合:-1以下
+//     */
+//    private int _comparePre(final byte[] key, final byte[] pattern) {
+//        int comp = 0;
+//        switch (_type) {
+//            case EXACTWORD:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToLatin(key, pattern, true);
+//                } else {
+//                    comp = CompareUtil.compareToJISX0208(key, pattern, true);
+//                }
+//                break;
+//            case MULTI:
+//                if (_style.getCandidatePage() == 0) {
+//                    comp = CompareUtil.compareToByte(key, pattern, true);
+//                } else {
+//                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                        comp = CompareUtil.compareToLatin(key, pattern, true);
+//                    } else {
+//                        comp = CompareUtil.compareToJISX0208(key, pattern, true);
+//                    }
+//                }
+//                break;
+//            case WORD:
+//            case ENDWORD:
+//            case KEYWORD:
+//            case CROSS:
+//            default:
+//                comp = CompareUtil.compareToByte(key, pattern, true);
+//                break;
+//        }
+//        try {
+//            _logger.debug("compare key word: (" + comp + ") '"
+//                    + new String(key, "x-JIS0208") + "' '"
+//                    + new String(pattern, "x-JIS0208") + "'");
+//        } catch (UnsupportedEncodingException e) {
+//        }
+//        return comp;
+//    }
+//
+//    /**
+//     * キーとパターンを比較します。
+//     *
+//     * @param key キー
+//     * @param pattern パターン
+//     * @return キーがパターンと同じ場合:0、
+//     *         キーがパターンより大きい場合:1以上、
+//     *         キーがパターンより小さい場合:-1以下
+//     */
+//    private int _compareSingle(final byte[] key, final byte[] pattern) {
+//        int comp = 0;
+//        switch (_type) {
+//            case ENDWORD:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToByte(key, pattern, false);
+//                } else {
+//                    IndexStyle style = _sub.getEndwordIndexStyle(SubBook.KANA);
+//                    if (style != null && _style.getStartPage() == style.getStartPage()) {
+//                        comp = CompareUtil.compareToKanaSingle(key, pattern, false);
+//                    } else {
+//                        comp = CompareUtil.compareToByte(key, pattern, false);
+//                    }
+//                }
+//                break;
+//            case EXACTWORD:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToLatin(key, pattern, false);
+//                } else {
+//                    IndexStyle style = _sub.getWordIndexStyle(SubBook.KANA);
+//                    if (style != null && _style.getStartPage() == style.getStartPage()) {
+//                        comp = CompareUtil.compareToKanaSingle(key, pattern, true);
+//                    } else {
+//                        comp = CompareUtil.compareToJISX0208(key, pattern, false);
+//                    }
+//                }
+//                break;
+//            case KEYWORD:
+//            case CROSS:
+//                comp = CompareUtil.compareToByte(key, pattern, false);
+//                break;
+//            case MULTI:
+//                if (_style.getCandidatePage() == 0) {
+//                    comp = CompareUtil.compareToByte(key, pattern, false);
+//                } else {
+//                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                        comp = CompareUtil.compareToLatin(key, pattern, false);
+//                    } else {
+//                        comp = CompareUtil.compareToJISX0208(key, pattern, false);
+//                    }
+//                }
+//                break;
+//            case WORD:
+//            default:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToByte(key, pattern, false);
+//                } else {
+//                    IndexStyle style = _sub.getWordIndexStyle(SubBook.KANA);
+//                    if (style != null && _style.getStartPage() == style.getStartPage()) {
+//                        comp = CompareUtil.compareToKanaSingle(key, pattern, false);
+//                    } else {
+//                        comp = CompareUtil.compareToByte(key, pattern, false);
+//                    }
+//                }
+//                break;
+//        }
+//        try {
+//            _logger.debug("compare key word: (" + comp + ") '"
+//                    + new String(key, "x-JIS0208") + "' '"
+//                    + new String(pattern, "x-JIS0208") + "'");
+//        } catch (UnsupportedEncodingException e) {
+//        }
+//        return comp;
+//    }
+//
+//    /**
+//     * キーとパターンを比較します。
+//     *
+//     * @param key キー
+//     * @param pattern パターン
+//     * @return キーがパターンと同じ場合:0、
+//     *         キーがパターンより大きい場合:1以上、
+//     *         キーがパターンより小さい場合:-1以下
+//     */
+//    private int _compareGroup(final byte[] key, final byte[] pattern) {
+//        int comp = 0;
+//        switch (_type) {
+//            case EXACTWORD:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToLatin(key, pattern, false);
+//                } else {
+//                    comp = CompareUtil.compareToKanaGroup(key, pattern, true);
+//                }
+//                break;
+//            case MULTI:
+//                if (_style.getCandidatePage() == 0) {
+//                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                        comp = CompareUtil.compareToByte(key, pattern, false);
+//                    } else {
+//                        comp = CompareUtil.compareToKanaGroup(key, pattern, false);
+//                    }
+//                } else {
+//                    if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                        comp = CompareUtil.compareToLatin(key, pattern, false);
+//                    } else {
+//                        comp = CompareUtil.compareToKanaGroup(key, pattern, true);
+//                    }
+//                }
+//                break;
+//            case WORD:
+//            case ENDWORD:
+//            case KEYWORD:
+//            case CROSS:
+//            default:
+//                if (_sub.getBook().getCharCode() == Book.CHARCODE_ISO8859_1) {
+//                    comp = CompareUtil.compareToByte(key, pattern, false);
+//                } else {
+//                    comp = CompareUtil.compareToKanaGroup(key, pattern, false);
+//                }
+//                break;
+//        }
+//        try {
+//            _logger.debug("compare key word: (" + comp + ") '"
+//                    + new String(key, "x-JIS0208") + "' '"
+//                    + new String(pattern, "x-JIS0208") + "'");
+//        } catch (UnsupportedEncodingException e) {
+//        }
+//        return comp;
+//    }
 
     /**
      * 検索を行います。
@@ -354,7 +413,7 @@ public class SingleWordSearcher implements Searcher {
                 _off = 4;
 
                 _logger.debug("page=0x" + HexUtil.toHexString(_page)
-                              + ", ID=0x" + HexUtil.toHexString(_pageID));
+                        + ", ID=0x" + HexUtil.toHexString(_pageID));
                 // リーフインデックスに達っしたらループ終了
                 if (_isLeafLayer(_pageID)) {
                     break;
@@ -414,26 +473,12 @@ public class SingleWordSearcher implements Searcher {
             }
 
             if (!_hasGroupEntry(_pageID)) {
-                Result result;
                 while (_entryIndex < _entryCount) {
-                    result = getNonGroupEntry();
-                    if (result != null) {
-                        return result;
-                    }
-                    if (_comparison < 0) {
-                        return null;
-                    }
+                    parseNonGroupEntry();
                 }
             } else {
-                Result result;
                 while (_entryIndex < _entryCount) {
-                    result = getGroupedEntry();
-                    if (result != null) {
-                        return result;
-                    }
-                    if (_comparison < 0) {
-                        return null;
-                    }
+                    parseGroupedEntry();
                 }
             }
 
@@ -523,14 +568,14 @@ public class SingleWordSearcher implements Searcher {
                 _entryCount = ByteUtil.getInt2(_cache, 2);
                 _entryIndex = 0;
                 _off = 4;
-                _logger.debug("page=0x" + HexUtil.toHexString(_page)
-                              + ", ID=0x" + HexUtil.toHexString(_pageID));
+                _logger.info("page=0x" + HexUtil.toHexString(_page)
+                        + ", ID=0x" + HexUtil.toHexString(_pageID));
             }
         }
     }
 
     // グループエントリなし
-    private Result getNonGroupEntry() throws EBException {
+    private void parseNonGroupEntry() throws EBException {
         if (_entryArrangement == VARIABLE) {
             if (_off + 1 > BookInputStream.PAGE_SIZE) {
                 throw new EBException(EBException.UNEXP_FILE, _file.getPath());
@@ -548,29 +593,26 @@ public class SingleWordSearcher implements Searcher {
         _off += _entryLength;
 
         _comparison = _compareSingle(_word, b);
-        Result result = null;
-        if (_comparison == 0) {
+        if (_comparison == 1) {
             // 本文/見出し位置の取得
             long tPage = ByteUtil.getLong4(_cache, _off);
             int tOff = ByteUtil.getInt2(_cache, _off+4);
             long hPage = ByteUtil.getLong4(_cache, _off+6);
             int hOff = ByteUtil.getInt2(_cache, _off+10);
-            result = new Result(_sub, hPage, hOff, tPage, tOff);
+            Result result = new Result(_sub, hPage, hOff, tPage, tOff);
+            export(b, result);
         }
 
         _entryIndex++;
         _off += 12;
-
-        return result;
     }
 
     // グループエントリあり
-    private Result getGroupedEntry() throws EBException {
+    private void parseGroupedEntry() throws EBException {
         if (_off + 2 > BookInputStream.PAGE_SIZE) {
             throw new EBException(EBException.UNEXP_FILE, _file.getPath());
         }
         int groupID = _cache[_off] & 0xff;
-        Result result = null;
         if (groupID == 0x00) {
             // シングルエントリ
             _entryLength = _cache[_off+1] & 0xff;
@@ -583,14 +625,16 @@ public class SingleWordSearcher implements Searcher {
             _off += _entryLength + 2;
 
             _comparison = _compareSingle(_canonical, b);
-            if (_comparison == 0) {
+            if (_comparison == 1) {
                 // 本文/見出し位置の取得
                 long tPage = ByteUtil.getLong4(_cache, _off);
                 int tOff = ByteUtil.getInt2(_cache, _off+4);
                 long hPage = ByteUtil.getLong4(_cache, _off+6);
                 int hOff = ByteUtil.getInt2(_cache, _off+10);
-                result = new Result(_sub, hPage, hOff, tPage, tOff);
+                Result result = new Result(_sub, hPage, hOff, tPage, tOff);
+                export(b, result);
             }
+
             _off += 12;
             _inGroupEntry = false;
         } else if (groupID == 0x80) {
@@ -608,7 +652,7 @@ public class SingleWordSearcher implements Searcher {
                 long hPage = ByteUtil.getLong4(_cache, _off);
                 int hOff = ByteUtil.getInt2(_cache, _off+4);
                 _keywordHeading =
-                    BookInputStream.getPosition(hPage, hOff);
+                        BookInputStream.getPosition(hPage, hOff);
                 _off += 6;
             } else if (_type == MULTI) {
                 if (_off + _entryLength + 6 > BookInputStream.PAGE_SIZE) {
@@ -627,6 +671,7 @@ public class SingleWordSearcher implements Searcher {
                 _comparison = _compareSingle(_canonical, b);
                 _off += _entryLength + 4;
             }
+            _currentGroupEntryIndex = b.clone();
             _inGroupEntry = true;
         } else if (groupID == 0xc0) {
             // グループエントリの要素
@@ -635,13 +680,14 @@ public class SingleWordSearcher implements Searcher {
                     throw new EBException(EBException.UNEXP_FILE, _file.getPath());
                 }
 
-                if (_comparison == 0 && _inGroupEntry) {
+                if (_comparison == 1 && _inGroupEntry) {
                     // 本文/見出し位置の取得
                     long tPage = ByteUtil.getLong4(_cache, _off+1);
                     int tOff = ByteUtil.getInt2(_cache, _off+5);
-                    result = new Result(_sub, _keywordHeading, tPage, tOff);
+                    Result result = new Result(_sub, _keywordHeading, tPage, tOff);
                     _keywordHeading =
-                        _sub.getNextHeadingPosition(_keywordHeading);
+                            _sub.getNextHeadingPosition(_keywordHeading);
+                    export(_currentGroupEntryIndex, result);
                 }
                 _off += 7;
             } else if (_type == MULTI) {
@@ -649,13 +695,14 @@ public class SingleWordSearcher implements Searcher {
                     throw new EBException(EBException.UNEXP_FILE, _file.getPath());
                 }
 
-                if (_comparison == 0 && _inGroupEntry) {
+                if (_comparison == 1 && _inGroupEntry) {
                     // 本文/見出し位置の取得
                     long tPage = ByteUtil.getLong4(_cache, _off+1);
                     int tOff = ByteUtil.getInt2(_cache, _off+5);
                     long hPage = ByteUtil.getLong4(_cache, _off+7);
                     int hOff = ByteUtil.getInt2(_cache, _off+11);
-                    result = new Result(_sub, hPage, hOff, tPage, tOff);
+                    Result result = new Result(_sub, hPage, hOff, tPage, tOff);
+                    export(_currentGroupEntryIndex, result);
                 }
                 _off += 13;
             } else {
@@ -667,14 +714,15 @@ public class SingleWordSearcher implements Searcher {
                 byte[] b = new byte[_entryLength];
                 System.arraycopy(_cache, _off+2, b, 0, b.length);
                 _off += _entryLength + 2;
-                if (_comparison == 0 && _inGroupEntry
-                    && _compareGroup(_word, b) == 0) {
+                if (_comparison == 1 && _inGroupEntry
+                        && _compareGroup(_word, b) == 0) {
                     // 本文/見出し位置の取得
                     long tPage = ByteUtil.getLong4(_cache, _off);
                     int tOff = ByteUtil.getInt2(_cache, _off+4);
                     long hPage = ByteUtil.getLong4(_cache, _off+6);
                     int hOff = ByteUtil.getInt2(_cache, _off+10);
-                    result = new Result(_sub, hPage, hOff, tPage, tOff);
+                    Result result = new Result(_sub, hPage, hOff, tPage, tOff);
+                    export(b, result);
                 }
                 _off += 12;
             }
@@ -684,8 +732,6 @@ public class SingleWordSearcher implements Searcher {
         }
 
         _entryIndex++;
-
-        return result;
     }
 }
 
