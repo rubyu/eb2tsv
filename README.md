@@ -12,7 +12,7 @@ eb2tsv -- Dump Tool for EPWING(Electronic Publishing-WING) Dictionary
 ```
 
 # DESCRIPTION
-Dump all entries in a EPWING dictionary, and prints results to standard output.The options are the following:
+Dumps all entries in an EPWING dictionary, and prints results to standard output.The options are the following:
 
 ```
  -d dir       : Path to the directory containing Epwing's CATALOGS file.
