@@ -6,10 +6,10 @@ object Build extends sbt.Build {
   lazy val commonSettings =
     Defaults.coreDefaultSettings ++
       Seq(
-        version := "0.3.2",
+        version := "1.0.0",
         scalaVersion := "2.11.8",
         organization := "com.github.rubyu",
-        name := "ebquery"
+        name := "eb2tsv"
       )
 
   lazy val project =
